@@ -1,0 +1,2 @@
+Migration files are auto-generated here by Alembic.
+Run: alembic revision --autogenerate -m "your message"
