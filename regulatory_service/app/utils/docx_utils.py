@@ -17,13 +17,49 @@ ALLOWED_EXTENSIONS = {".docx"}
 # Custom mammoth style map — maps Word styles to clean HTML elements
 _STYLE_MAP = """
 p[style-name='Heading 1'] => h1:fresh
+p[style-name='Heading 1 Centered'] => h1.text-center:fresh
 p[style-name='Heading 2'] => h2:fresh
+p[style-name='Heading 2 Centered'] => h2.text-center:fresh
 p[style-name='Heading 3'] => h3:fresh
+p[style-name='Heading 3 Centered'] => h3.text-center:fresh
 p[style-name='Heading 4'] => h4:fresh
+p[style-name='Heading 4 Centered'] => h4.text-center:fresh
+p[style-name='Title'] => h1:fresh
+p[style-name='Title Centered'] => h1.text-center:fresh
+p[style-name='Subtitle'] => h2:fresh
+p[style-name='Subtitle Centered'] => h2.text-center:fresh
 p[style-name='List Paragraph'] => li:fresh
 r[style-name='Strong'] => strong
 r[style-name='Emphasis'] => em
+u => u
+r[style-name='Underline'] => u
+
+# Generic alignment mappings (for non-heading paragraphs)
+p[style-name='Normal Centered'] => p.text-center:fresh
+p[style-name='Normal Right'] => p.text-right:fresh
+p[style-name='Normal Justified'] => p.text-justify:fresh
 """
+
+
+def _transform_paragraph(paragraph):
+    """
+    Inspect paragraph alignment and modify the style name so the style map can catch it.
+    This runs BEFORE the style map is applied.
+    """
+    if paragraph.alignment:
+        suffix = ""
+        if paragraph.alignment == "center": suffix = " Centered"
+        elif paragraph.alignment == "right": suffix = " Right"
+        elif paragraph.alignment == "justify": suffix = " Justified"
+        
+        if suffix:
+            curr_id = paragraph.style_id or "Normal"
+            curr_name = paragraph.style_name or "Normal"
+            return paragraph.copy(
+                style_id=curr_id + suffix.replace(" ", ""), 
+                style_name=curr_name + suffix
+            )
+    return paragraph
 
 
 def _ensure_media_dir() -> Path:
@@ -64,7 +100,11 @@ def extract_html(relative_path: str) -> str:
         raise HTTPException(status_code=404, detail="Stored file not found")
 
     with open(full_path, "rb") as f:
-        result = mammoth.convert_to_html(f, style_map=_STYLE_MAP)
+        result = mammoth.convert_to_html(
+            f,
+            style_map=_STYLE_MAP,
+            transform_document=mammoth.transforms.paragraph(_transform_paragraph)
+        )
 
     html = result.value  # the converted HTML string
     return html

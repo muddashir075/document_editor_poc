@@ -109,9 +109,8 @@ export function DocumentViewer({ document, onlineUsers }: Props) {
 
   /** Apply consistent inline border styles to a newly created cell */
   const styleCell = (cell: HTMLTableCellElement) => {
-    cell.style.border = '1.5px solid #94a3b8'
-    cell.style.padding = '8px 12px'
-    cell.style.textAlign = 'left'
+    cell.style.border = '1px solid #cbd5e1'
+    cell.style.padding = '10px 14px'
     cell.style.verticalAlign = 'top'
     cell.style.minWidth = '80px'
   }
@@ -189,9 +188,9 @@ export function DocumentViewer({ document, onlineUsers }: Props) {
   const insertTable = () => {
     editRef.current?.focus()
     const rows = 3, cols = 3
-    const cellStyle = 'border:1.5px solid #94a3b8;padding:8px 12px;text-align:left;vertical-align:top;min-width:80px;'
-    const thStyle = cellStyle + 'background:#f1f5f9;font-weight:600;color:#334155;'
-    let html = '<table style="border-collapse:collapse;width:100%;margin:16px 0;font-size:13px;"><thead><tr>'
+    const cellStyle = 'border:1px solid #cbd5e1;padding:10px 14px;vertical-align:top;min-width:80px;'
+    const thStyle = cellStyle + 'background:#f8fafc;font-weight:600;color:#1e293b;'
+    let html = '<table style="border-collapse:collapse;width:100%;margin:20px 0;font-size:14px;"><thead><tr>'
     for (let c = 0; c < cols; c++) html += `<th style="${thStyle}">Header ${c + 1}</th>`
     html += '</tr></thead><tbody>'
     for (let r = 0; r < rows - 1; r++) {
@@ -371,19 +370,19 @@ function injectTableStyles(html: string): string {
     .replace(
       /<table(\s[^>]*)?>/gi,
       (_m, attrs = '') =>
-        `<table${attrs} style="border-collapse:collapse;width:100%;margin:16px 0;font-size:13px;">`
+        `<table${attrs} style="border-collapse:collapse;width:100%;margin:20px 0;font-size:14px;">`
     )
     // <td ...> → add inline border + padding
     .replace(
       /<td(\s[^>]*)?>/gi,
       (_m, attrs = '') =>
-        `<td${attrs} style="border:1.5px solid #94a3b8;padding:8px 12px;text-align:left;vertical-align:top;min-width:80px;">`
+        `<td${attrs} style="border:1px solid #cbd5e1;padding:10px 14px;vertical-align:top;min-width:80px;">`
     )
     // <th ...> → add inline border + padding + background
     .replace(
       /<th(\s[^>]*)?>/gi,
       (_m, attrs = '') =>
-        `<th${attrs} style="border:1.5px solid #94a3b8;padding:8px 12px;text-align:left;vertical-align:top;min-width:80px;background:#f1f5f9;font-weight:600;color:#334155;">`
+        `<th${attrs} style="border:1px solid #cbd5e1;padding:10px 14px;vertical-align:top;min-width:80px;background:#f8fafc;font-weight:600;color:#1e293b;">`
     )
 }
 
@@ -416,11 +415,15 @@ const styles = {
   onlineCount: { fontSize: 11, color: '#64748b' },
   content: {
     flex: 1, overflowY: 'auto' as const,
-    maxWidth: 860, lineHeight: 1.8, fontSize: 14, color: '#1e293b',
+    width: '100%', maxWidth: 900, margin: '0 auto',
+    padding: '40px 60px', background: '#fff',
+    boxShadow: '0 4px 15px rgba(0,0,0,0.05)',
+    borderRadius: 4, border: '1px solid #e2e8f0',
+    lineHeight: 1.6, fontSize: 16, color: '#334155',
   },
   editableContent: {
-    outline: 'none', border: '2px solid #93c5fd',
-    borderRadius: 8, padding: '16px 20px', minHeight: 400, cursor: 'text',
+    outline: 'none', border: '2px solid #3b82f6',
+    cursor: 'text', minHeight: 600,
   },
 }
 
@@ -434,41 +437,50 @@ if (typeof document !== 'undefined') {
   s.textContent = `
     /* ── Tables ── */
     .doc-viewer table {
-      border-collapse: collapse !important;
-      width: 100% !important;
-      margin: 16px 0 !important;
-      font-size: 13px !important;
+      border-collapse: collapse;
+      width: 100%;
+      margin: 20px 0;
+      font-size: 15px;
     }
     .doc-viewer td, .doc-viewer th {
-      border: 1.5px solid #94a3b8 !important;
-      padding: 8px 12px !important;
-      text-align: left !important;
-      vertical-align: top !important;
-      min-width: 80px !important;
+      border: 1px solid #cbd5e1;
+      padding: 10px 14px;
+      vertical-align: top;
+      min-width: 80px;
     }
     .doc-viewer th {
-      background: #f1f5f9 !important;
-      font-weight: 600 !important;
-      color: #334155 !important;
+      background: #f8fafc;
+      font-weight: 600;
+      color: #1e293b;
     }
-    .doc-viewer tr:nth-child(even) td { background: #f8fafc !important; }
     /* Highlight cell on hover in edit mode */
     .doc-editable td:hover, .doc-editable th:hover {
-      outline: 2px solid #3b82f6 !important;
+      outline: 2px solid #3b82f6;
       outline-offset: -2px;
     }
     /* ── Headings ── */
-    .doc-viewer h1 { font-size: 22px !important; font-weight: 700 !important; margin: 24px 0 8px !important; color: #0f172a !important; }
-    .doc-viewer h2 { font-size: 18px !important; font-weight: 600 !important; margin: 20px 0 6px !important; color: #1e293b !important; }
-    .doc-viewer h3 { font-size: 15px !important; font-weight: 600 !important; margin: 16px 0 4px !important; color: #334155 !important; }
-    .doc-viewer h4 { font-size: 14px !important; font-weight: 600 !important; margin: 12px 0 4px !important; color: #475569 !important; }
+    .doc-viewer h1 { font-size: 32px; font-weight: 700; margin: 32px 0 16px; color: #0f172a; line-height: 1.2; }
+    .doc-viewer h2 { font-size: 24px; font-weight: 600; margin: 28px 0 12px; color: #1e293b; line-height: 1.3; }
+    .doc-viewer h3 { font-size: 20px; font-weight: 600; margin: 24px 0 8px; color: #334155; line-height: 1.4; }
+    .doc-viewer h4 { font-size: 18px; font-weight: 600; margin: 20px 0 8px; color: #475569; line-height: 1.4; }
     /* ── Lists ── */
-    .doc-viewer ul, .doc-viewer ol { padding-left: 24px !important; margin: 8px 0 !important; }
-    .doc-viewer li { margin-bottom: 4px !important; }
+    .doc-viewer ul, .doc-viewer ol { padding-left: 32px; margin: 12px 0; }
+    .doc-viewer li { margin-bottom: 6px; }
     /* ── Paragraphs ── */
-    .doc-viewer p  { margin: 0 0 10px !important; }
-    .doc-viewer strong { font-weight: 600 !important; }
-    .doc-viewer em { font-style: italic !important; }
+    .doc-viewer p  { margin: 0 0 12px; min-height: 1.2em; }
+    .doc-viewer strong { font-weight: 700; }
+    .doc-viewer em { font-style: italic; }
+    .doc-viewer u { text-decoration: underline; text-decoration-color: #2563eb; }
+
+    /* ── Alignment helpers (Mammoth classes) ── */
+    .doc-viewer .text-center { text-align: center !important; }
+    .doc-viewer .text-right { text-align: right !important; }
+    .doc-viewer .text-justify { text-align: justify !important; }
+
+    /* ── Alignment helpers (Inline styles if present) ── */
+    .doc-viewer [style*="text-align: center"], .doc-viewer [style*="text-align:center"] { text-align: center; }
+    .doc-viewer [style*="text-align: right"], .doc-viewer [style*="text-align:right"] { text-align: right; }
+    .doc-viewer [style*="text-align: justify"], .doc-viewer [style*="text-align:justify"] { text-align: justify; }
   `
   document.head.appendChild(s)
 }
