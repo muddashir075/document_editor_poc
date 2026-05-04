@@ -1,1 +1,4 @@
 regulatory_service/venv
+regulatory_frontend/node_modules
+regulatory_service/doc_media
+*.pyc
