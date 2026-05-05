@@ -4,9 +4,11 @@ Utilities for handling .docx uploads:
 - Extract full HTML content (preserving tables, bold, lists, headings) via mammoth
 """
 import uuid
+import base64
 from pathlib import Path
 
 import mammoth
+import docx
 from fastapi import UploadFile, HTTPException
 
 from app.core.config import settings
@@ -154,21 +156,53 @@ def extract_html(relative_path: str) -> str:
 
     html = result.value  # the converted HTML string
 
-    # Prepend header and append footer
-    # Using http://localhost:8000/static as the base URL for brand assets
-    header_html = """
-    <div class="doc-header" style="text-align: center; margin-bottom: 40px; padding-bottom: 20px; border-bottom: 1px solid #e2e8f0;">
-        <img src="http://localhost:8000/static/sgcan.png" style="max-height: 100px; width: auto;" alt="Header Logo">
-    </div>
-    """
+    # Extract original headers and footers using python-docx
+    # Mammoth doesn't support them, so we'll get the text at least
+    original_header = ""
+    original_footer = ""
+    try:
+        doc = docx.Document(full_path)
+        # Combine text and images from all header/footer sections
+        header_texts = []
+        for section in doc.sections:
+            if section.header:
+                # Get text
+                for p in section.header.paragraphs:
+                    if p.text.strip():
+                        header_texts.append(f"<span>{p.text}</span>")
+                # Get images from relationships
+                for rel in section.header.part.rels.values():
+                    if "image" in rel.target_ref:
+                        try:
+                            img_data = rel.target_part.blob
+                            b64 = base64.b64encode(img_data).decode("utf-8")
+                            header_texts.append(f'<img src="data:image/png;base64,{b64}" style="max-height: 80px; width: auto; margin: 10px;" />')
+                        except:
+                            pass
+        original_header = "".join(header_texts)
 
-    footer_html = """
-    <div class="doc-footer" style="margin-top: 60px; padding-top: 20px; border-top: 1px solid #e2e8f0; display: flex; justify-content: space-around; align-items: center; flex-wrap: wrap; gap: 20px;">
-        <img src="http://localhost:8000/static/bolivia.png" style="max-height: 60px; width: auto;" alt="Bolivia">
-        <img src="http://localhost:8000/static/columbia.png" style="max-height: 60px; width: auto;" alt="Columbia">
-        <img src="http://localhost:8000/static/ecuador.jpeg" style="max-height: 60px; width: auto;" alt="Ecuador">
-        <img src="http://localhost:8000/static/peru.jpeg" style="max-height: 60px; width: auto;" alt="Peru">
-    </div>
-    """
+        footer_texts = []
+        for section in doc.sections:
+            if section.footer:
+                # Get text
+                for p in section.footer.paragraphs:
+                    if p.text.strip():
+                        footer_texts.append(f"<span>{p.text}</span>")
+                # Get images
+                for rel in section.footer.part.rels.values():
+                    if "image" in rel.target_ref:
+                        try:
+                            img_data = rel.target_part.blob
+                            b64 = base64.b64encode(img_data).decode("utf-8")
+                            footer_texts.append(f'<img src="data:image/png;base64,{b64}" style="max-height: 60px; width: auto; margin: 5px;" />')
+                        except:
+                            pass
+        original_footer = "".join(footer_texts)
+    except Exception as e:
+        print(f"Error extracting headers/footers: {e}")
 
-    return f"{header_html}\n{html}\n{footer_html}"
+    # We'll wrap headers and footers in identifiable tags so the frontend can repeat them on each page
+    header_block = f'<div class="doc-header-block" style="display: flex; align-items: center; gap: 15px; flex-wrap: wrap;">{original_header}</div>' if original_header else ""
+    footer_block = f'<div class="doc-footer-block" style="display: flex; align-items: center; gap: 15px; flex-wrap: wrap;">{original_footer}</div>' if original_footer else ""
+
+    return f"{header_block}\n{html}\n{footer_block}"

@@ -242,9 +242,19 @@ export function DocumentViewer({ document, onlineUsers }: Props) {
 
   const wrappedHtml = injectTableStyles(wrapTopLevelBlocks(document.content))
   
+  // Extract headers and footers from the block markers
+  const headerMatch = wrappedHtml.match(/<div class="doc-header-block">([\s\S]*?)<\/div>/);
+  const footerMatch = wrappedHtml.match(/<div class="doc-footer-block">([\s\S]*?)<\/div>/);
+  const headerHtml = headerMatch ? headerMatch[1] : '';
+  const footerHtml = footerMatch ? footerMatch[1] : '';
+
+  // Clean the body by removing the block markers
+  const cleanBody = wrappedHtml
+    .replace(/<div class="doc-header-block">[\s\S]*?<\/div>/, '')
+    .replace(/<div class="doc-footer-block">[\s\S]*?<\/div>/, '');
+
   // Split content into physical pages for View Mode
-  // The backend uses <span class="page-break">...</span> for breaks
-  const viewPages = wrappedHtml.split(/<span class="page-break">.*?<\/span>/gi);
+  const viewPages = cleanBody.split(/<span class="page-break">.*?<\/span>/gi);
 
   return (
     <div style={styles.wrapper}>
@@ -296,8 +306,25 @@ export function DocumentViewer({ document, onlineUsers }: Props) {
             key={i}
             className="doc-viewer"
             style={styles.page}
-            dangerouslySetInnerHTML={{ __html: pContent }}
-          />
+          >
+            {headerHtml && (
+              <div 
+                className="doc-header-repeated" 
+                style={{ marginBottom: 40, borderBottom: '1px solid #eee', paddingBottom: 10, fontSize: 12, color: '#64748b' }}
+                dangerouslySetInnerHTML={{ __html: headerHtml }} 
+              />
+            )}
+            
+            <div dangerouslySetInnerHTML={{ __html: pContent }} />
+            
+            {footerHtml && (
+              <div 
+                className="doc-footer-repeated" 
+                style={{ marginTop: 40, borderTop: '1px solid #eee', paddingTop: 10, fontSize: 12, color: '#64748b' }}
+                dangerouslySetInnerHTML={{ __html: footerHtml }} 
+              />
+            )}
+          </div>
         ))}
 
         {/* ── Edit mode: Single continuous flow with visual breaks ── */}
