@@ -4,6 +4,7 @@ import { useAuthStore } from '@/store/authStore'
 import { useUpdateDocument } from '@/hooks/useDocuments'
 import { Button } from '@/components/ui/Button'
 import type { Document } from '@/types'
+import DocumentToolbar from './DocumentToolbar'
 
 interface Props {
   document: Document
@@ -36,6 +37,23 @@ export function DocumentViewer({ document, onlineUsers }: Props) {
     if (window.document.queryCommandState('bold')) formats.add('bold')
     if (window.document.queryCommandState('italic')) formats.add('italic')
     if (window.document.queryCommandState('underline')) formats.add('underline')
+    
+    // Detect block type
+    try {
+      const block = window.document.queryCommandValue('formatBlock')
+      if (block) formats.add(block.toLowerCase())
+      
+      let font = window.document.queryCommandValue('fontName')
+      if (font) {
+        // Strip quotes like 'Arial' or "Arial"
+        font = font.replace(/['"]/g, '')
+        formats.add(`font-${font.toLowerCase().replace(/\s/g, '-')}`)
+      }
+      
+      const size = window.document.queryCommandValue('fontSize')
+      if (size) formats.add(`size-${size}`)
+    } catch (e) {}
+
     setActiveFormats(formats)
   }, [])
 
@@ -57,6 +75,38 @@ export function DocumentViewer({ document, onlineUsers }: Props) {
   }
 
   // ── Save / Cancel ───────────────────────────────────────────────────────────
+  const handleToolbarAction = (command: string, value?: string) => {
+    if (!editRef.current) return;
+    editRef.current.focus();
+
+    if (command === 'insertTable') insertTable();
+    else if (command === 'addRowAbove') addRowAbove();
+    else if (command === 'addRowBelow') addRowBelow();
+    else if (command === 'deleteRow') deleteRow();
+    else if (command === 'addColumnRight') addColumnRight();
+    else if (command === 'addColumnLeft') addColumnLeft();
+    else if (command === 'deleteColumn') deleteColumn();
+    else if (command === 'fontSizeIncrease') {
+      const cur = parseInt(window.document.queryCommandValue('fontSize')) || 3;
+      window.document.execCommand('fontSize', false, Math.min(7, cur + 1).toString());
+    }
+    else if (command === 'fontSizeDecrease') {
+      const cur = parseInt(window.document.queryCommandValue('fontSize')) || 3;
+      window.document.execCommand('fontSize', false, Math.max(1, cur - 1).toString());
+    }
+    else if (command === 'insertPageBreak') {
+      window.document.execCommand('insertHTML', false, '<span class="page-break"></span>');
+    }
+    else if (command === 'formatBlock') window.document.execCommand('formatBlock', false, value);
+    else window.document.execCommand(command, false, value);
+
+    updateActiveFormats();
+    
+    // Trigger the onInput handler manually to sync state
+    const event = new Event('input', { bubbles: true });
+    editRef.current.dispatchEvent(event);
+  };
+
   const handleSave = () => {
     const html = editRef.current?.innerHTML ?? document.content
     updateDoc.mutate(
@@ -68,18 +118,6 @@ export function DocumentViewer({ document, onlineUsers }: Props) {
   const handleCancel = () => {
     if (editRef.current) editRef.current.innerHTML = document.content
     setEditMode(false)
-  }
-
-  // ── execCommand helpers ─────────────────────────────────────────────────────
-  const exec = (cmd: string, value?: string) => {
-    editRef.current?.focus()
-    window.document.execCommand(cmd, false, value)
-    updateActiveFormats()
-  }
-
-  const setHeading = (tag: string) => {
-    editRef.current?.focus()
-    window.document.execCommand('formatBlock', false, tag)
   }
 
   // ── Table helpers ───────────────────────────────────────────────────────────
@@ -203,12 +241,23 @@ export function DocumentViewer({ document, onlineUsers }: Props) {
   }
 
   const wrappedHtml = injectTableStyles(wrapTopLevelBlocks(document.content))
+  
+  // Split content into physical pages for View Mode
+  // The backend uses <span class="page-break">...</span> for breaks
+  const viewPages = wrappedHtml.split(/<span class="page-break">.*?<\/span>/gi);
 
   return (
     <div style={styles.wrapper}>
       {/* ── Top toolbar ── */}
-      <div style={styles.toolbar}>
-        <div style={styles.fileInfo}>
+      <div style={styles.container}>
+        {editMode && (
+          <DocumentToolbar 
+            onAction={handleToolbarAction} 
+            activeFormats={activeFormats}
+            disabled={false} 
+          />
+        )}
+        <div style={styles.header}>
           {document.original_filename && (
             <span style={styles.filename}>📄 {document.original_filename}</span>
           )}
@@ -238,117 +287,40 @@ export function DocumentViewer({ document, onlineUsers }: Props) {
         </div>
       </div>
 
-      {/* ── Rich edit toolbar (only in edit mode) ── */}
-      {editMode && (
-        <div style={styles.editToolbar}>
-          {/* Formatting */}
-          <div style={styles.toolGroup}>
-            <ToolBtn active={activeFormats.has('bold')}    onClick={() => exec('bold')}      title="Bold (Ctrl+B)">B</ToolBtn>
-            <ToolBtn active={activeFormats.has('italic')}  onClick={() => exec('italic')}    title="Italic (Ctrl+I)" style={{ fontStyle: 'italic' }}>I</ToolBtn>
-            <ToolBtn active={activeFormats.has('underline')} onClick={() => exec('underline')} title="Underline (Ctrl+U)" style={{ textDecoration: 'underline' }}>U</ToolBtn>
-          </div>
 
-          <div style={styles.divider} />
+      {/* ── Main Workspace ── */}
+      <div style={styles.content}>
+        {/* ── View mode: Paginated ── */}
+        {!editMode && viewPages.map((pContent, i) => (
+          <div
+            key={i}
+            className="doc-viewer"
+            style={styles.page}
+            dangerouslySetInnerHTML={{ __html: pContent }}
+          />
+        ))}
 
-          {/* Headings */}
-          <div style={styles.toolGroup}>
-            <ToolBtn onClick={() => setHeading('h1')} title="Heading 1">H1</ToolBtn>
-            <ToolBtn onClick={() => setHeading('h2')} title="Heading 2">H2</ToolBtn>
-            <ToolBtn onClick={() => setHeading('h3')} title="Heading 3">H3</ToolBtn>
-            <ToolBtn onClick={() => setHeading('p')}  title="Normal paragraph">¶</ToolBtn>
-          </div>
-
-          <div style={styles.divider} />
-
-          {/* Lists */}
-          <div style={styles.toolGroup}>
-            <ToolBtn onClick={() => exec('insertUnorderedList')} title="Bullet list">• List</ToolBtn>
-            <ToolBtn onClick={() => exec('insertOrderedList')}   title="Numbered list">1. List</ToolBtn>
-          </div>
-
-          <div style={styles.divider} />
-
-          {/* Table — insert */}
-          <div style={styles.toolGroup}>
-            <ToolBtn onClick={insertTable} title="Insert a 3×3 table">⊞ Table</ToolBtn>
-          </div>
-
-          <div style={styles.divider} />
-
-          {/* Table — row/col operations */}
-          <div style={styles.toolGroup}>
-            <ToolBtn onClick={addRowAbove}   title="Add row above cursor">↑ Row</ToolBtn>
-            <ToolBtn onClick={addRowBelow}   title="Add row below cursor">↓ Row</ToolBtn>
-            <ToolBtn onClick={deleteRow}     title="Delete current row" danger>✕ Row</ToolBtn>
-          </div>
-          <div style={styles.toolGroup}>
-            <ToolBtn onClick={addColumnLeft}  title="Add column to the left">← Col</ToolBtn>
-            <ToolBtn onClick={addColumnRight} title="Add column to the right">→ Col</ToolBtn>
-            <ToolBtn onClick={deleteColumn}   title="Delete current column" danger>✕ Col</ToolBtn>
-          </div>
-        </div>
-      )}
-
-      {/* ── View mode ── */}
-      <div
-        ref={viewRef}
-        onMouseUp={handleMouseUp}
-        className="doc-viewer"
-        style={{ ...styles.content, display: editMode ? 'none' : 'block' }}
-        dangerouslySetInnerHTML={{ __html: wrappedHtml }}
-      />
-
-      {/* ── Edit mode: contentEditable ── */}
-      <div
-        ref={editRef}
-        contentEditable={editMode}
-        suppressContentEditableWarning
-        onKeyUp={updateActiveFormats}
-        onMouseUp={handleMouseUp}
-        className="doc-viewer doc-editable"
-        style={{
-          ...styles.content,
-          ...styles.editableContent,
-          display: editMode ? 'block' : 'none',
-        }}
-      />
+        {/* ── Edit mode: Single continuous flow with visual breaks ── */}
+        <div
+          ref={editRef}
+          contentEditable={editMode}
+          suppressContentEditableWarning
+          onKeyUp={updateActiveFormats}
+          onMouseUp={handleMouseUp}
+          className="doc-viewer doc-editable"
+          style={{
+            ...styles.page,
+            ...styles.editableContent,
+            display: editMode ? 'block' : 'none',
+            minHeight: '2000px', // Allow scrolling in edit mode
+          }}
+          dangerouslySetInnerHTML={editMode ? { __html: document.content } : undefined}
+        />
+      </div>
     </div>
   )
 }
 
-// ── Small toolbar button ────────────────────────────────────────────────────
-function ToolBtn({
-  children, onClick, title, active, danger, style: extraStyle,
-}: {
-  children: React.ReactNode
-  onClick: () => void
-  title?: string
-  active?: boolean
-  danger?: boolean
-  style?: React.CSSProperties
-}) {
-  return (
-    <button
-      onMouseDown={e => { e.preventDefault(); onClick() }} // preventDefault keeps focus in editor
-      title={title}
-      style={{
-        padding: '3px 8px',
-        borderRadius: 4,
-        border: '1px solid',
-        borderColor: active ? '#2563eb' : danger ? '#fca5a5' : '#e2e8f0',
-        background: active ? '#eff6ff' : danger ? '#fff1f2' : '#fff',
-        color: active ? '#2563eb' : danger ? '#dc2626' : '#374151',
-        fontSize: 12,
-        fontWeight: 600,
-        cursor: 'pointer',
-        lineHeight: 1.4,
-        ...extraStyle,
-      }}
-    >
-      {children}
-    </button>
-  )
-}
 
 // ── Wrap top-level blocks with data-pid for comment anchoring ───────────────
 function wrapTopLevelBlocks(html: string): string {
@@ -396,11 +368,14 @@ const styles = {
     display: 'flex', alignItems: 'center', flexWrap: 'wrap' as const, gap: 4,
     padding: '6px 0 10px', marginBottom: 8,
     borderBottom: '1px solid #e2e8f0', flexShrink: 0,
+    zIndex: 10,
   },
-  toolGroup: { display: 'flex', gap: 3 },
-  divider: { width: 1, height: 22, background: '#e2e8f0', margin: '0 4px' },
+  header: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    padding: '8px 16px',
+  },
   fileInfo: { display: 'flex', alignItems: 'center', gap: 8 },
-  filename: { fontSize: 12, color: '#2563eb', fontWeight: 500 },
+  filename: { fontSize: 13, color: '#1e293b', fontWeight: 600 },
   editBadge: {
     fontSize: 11, background: '#fef3c7', color: '#92400e',
     padding: '2px 8px', borderRadius: 9999, fontWeight: 600,
@@ -414,16 +389,28 @@ const styles = {
   },
   onlineCount: { fontSize: 11, color: '#64748b' },
   content: {
-    flex: 1, overflowY: 'auto' as const,
-    width: '100%', maxWidth: 900, margin: '0 auto',
-    padding: '40px 60px', background: '#fff',
-    boxShadow: '0 4px 15px rgba(0,0,0,0.05)',
-    borderRadius: 4, border: '1px solid #e2e8f0',
-    lineHeight: 1.6, fontSize: 16, color: '#334155',
+    flex: 1, 
+    overflowY: 'auto' as const,
+    padding: '40px 0', // Padding for the workspace
+    display: 'flex',
+    flexDirection: 'column' as const,
+    alignItems: 'center',
+  },
+  page: {
+    width: '816px', // A4 Width at 96 DPI
+    minHeight: '1056px', // A4 Height
+    padding: '96px', // Standard 1-inch margins
+    background: '#fff',
+    boxShadow: '0 0 10px rgba(0,0,0,0.1)',
+    margin: '0 auto 20px',
+    lineHeight: 1.6, 
+    fontSize: 16, 
+    color: '#334155',
+    position: 'relative' as const,
   },
   editableContent: {
-    outline: 'none', border: '2px solid #3b82f6',
-    cursor: 'text', minHeight: 600,
+    outline: 'none',
+    cursor: 'text',
   },
 }
 
@@ -481,6 +468,40 @@ if (typeof document !== 'undefined') {
     .doc-viewer [style*="text-align: center"], .doc-viewer [style*="text-align:center"] { text-align: center; }
     .doc-viewer [style*="text-align: right"], .doc-viewer [style*="text-align:right"] { text-align: right; }
     .doc-viewer [style*="text-align: justify"], .doc-viewer [style*="text-align:justify"] { text-align: justify; }
+
+    /* ── Page Break ── */
+    .page-break {
+      display: block;
+      height: 40px; /* Physical gap */
+      margin: 40px -96px; /* Extend into page margins to hit workspace edges */
+      background: #cbd5e1; /* Must match workspace background */
+      box-shadow: inset 0 10px 10px -10px rgba(0,0,0,0.15), inset 0 -10px 10px -10px rgba(0,0,0,0.15);
+      position: relative;
+      user-select: none;
+      pointer-events: none;
+      width: calc(100% + 192px);
+      clear: both;
+    }
+    .page-break::after {
+      content: 'PAGE BREAK';
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 10px;
+      font-weight: 800;
+      color: #64748b;
+      letter-spacing: 3px;
+      background: #cbd5e1;
+      padding: 0 15px;
+    }
+    /* Hide the marker character inside the span */
+    .page-break { color: transparent; font-size: 0; }
+
+    /* ── Branding Header/Footer ── */
+    .doc-header { user-select: none; pointer-events: none; margin-bottom: 40px; }
+    .doc-footer { user-select: none; pointer-events: none; margin-top: 40px; }
+    .doc-header img, .doc-footer img { display: inline-block; }
   `
   document.head.appendChild(s)
 }

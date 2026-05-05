@@ -38,6 +38,7 @@ r[style-name='Underline'] => u
 p[style-name='Normal Centered'] => p.text-center:fresh
 p[style-name='Normal Right'] => p.text-right:fresh
 p[style-name='Normal Justified'] => p.text-justify:fresh
+r[style-name='Page Break'] => span.page-break:fresh
 """
 
 
@@ -46,6 +47,14 @@ def _transform_paragraph(paragraph):
     Inspect paragraph alignment and modify the style name so the style map can catch it.
     This runs BEFORE the style map is applied.
     """
+    # Check for page break before property
+    if getattr(paragraph, 'page_break_before', False):
+        return paragraph.copy(
+            style_id="PageBreak",
+            style_name="Page Break",
+            children=[]
+        )
+
     if paragraph.alignment:
         suffix = ""
         if paragraph.alignment == "center": suffix = " Centered"
@@ -60,6 +69,33 @@ def _transform_paragraph(paragraph):
                 style_name=curr_name + suffix
             )
     return paragraph
+
+def _transform_run(run):
+    """
+    Detect page breaks in runs and replace them with a marker we can style.
+    Mammoth doesn't handle page breaks by default.
+    """
+    new_children = []
+    has_page_break = False
+    
+    for child in run.children:
+        # Mammoth break objects have type="break" and break_type="page"
+        el_type = getattr(child, 'type', None)
+        br_type = getattr(child, 'break_type', None)
+        
+        if el_type == "break" and br_type == "page":
+            has_page_break = True
+            break
+        new_children.append(child)
+    
+    if has_page_break:
+        return run.copy(
+            style_id="PageBreak",
+            style_name="Page Break",
+            children=[mammoth.documents.text("\u00A0")]
+        )
+    
+    return run
 
 
 def _ensure_media_dir() -> Path:
@@ -100,11 +136,39 @@ def extract_html(relative_path: str) -> str:
         raise HTTPException(status_code=404, detail="Stored file not found")
 
     with open(full_path, "rb") as f:
+        def combined_transform(element):
+            # The root 'Document' or other objects might not have a 'type' attribute
+            el_type = getattr(element, "type", None)
+            
+            if el_type == "paragraph":
+                return _transform_paragraph(element)
+            if el_type == "run":
+                return _transform_run(element)
+            return element
+
         result = mammoth.convert_to_html(
             f,
             style_map=_STYLE_MAP,
-            transform_document=mammoth.transforms.paragraph(_transform_paragraph)
+            transform_document=combined_transform
         )
 
     html = result.value  # the converted HTML string
-    return html
+
+    # Prepend header and append footer
+    # Using http://localhost:8000/static as the base URL for brand assets
+    header_html = """
+    <div class="doc-header" style="text-align: center; margin-bottom: 40px; padding-bottom: 20px; border-bottom: 1px solid #e2e8f0;">
+        <img src="http://localhost:8000/static/sgcan.png" style="max-height: 100px; width: auto;" alt="Header Logo">
+    </div>
+    """
+
+    footer_html = """
+    <div class="doc-footer" style="margin-top: 60px; padding-top: 20px; border-top: 1px solid #e2e8f0; display: flex; justify-content: space-around; align-items: center; flex-wrap: wrap; gap: 20px;">
+        <img src="http://localhost:8000/static/bolivia.png" style="max-height: 60px; width: auto;" alt="Bolivia">
+        <img src="http://localhost:8000/static/columbia.png" style="max-height: 60px; width: auto;" alt="Columbia">
+        <img src="http://localhost:8000/static/ecuador.jpeg" style="max-height: 60px; width: auto;" alt="Ecuador">
+        <img src="http://localhost:8000/static/peru.jpeg" style="max-height: 60px; width: auto;" alt="Peru">
+    </div>
+    """
+
+    return f"{header_html}\n{html}\n{footer_html}"
