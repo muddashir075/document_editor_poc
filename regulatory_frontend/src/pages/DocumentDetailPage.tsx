@@ -22,7 +22,7 @@ export function DocumentDetailPage() {
   const docId = Number(id)
   const { data: doc, isLoading } = useDocument(docId)
   const { activePanel, setActivePanel, onlineUsers } = useUiStore()
-  const { send } = useCollaboration(docId)
+  useCollaboration(docId)
 
   if (isLoading) return <div style={styles.center}><Spinner size={36} /></div>
   if (!doc) return <div style={styles.center}><p>Document not found.</p></div>
