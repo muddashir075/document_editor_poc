@@ -25,23 +25,25 @@ import { Button } from '@/components/ui/Button'
 import type { Document } from '@/types'
 import DocumentToolbar from './DocumentToolbar'
 
-const PAGE_HEIGHT = 1123;  // A4 at 96dpi
+const PAGE_HEIGHT = 1300;  // A4 at 96dpi
 const PAGE_WIDTH  = 794;
 const PAGE_MARGIN = 96;    // ~1 inch
+const PAGE_GAP = 32;       // Gap between pages in editor
 
 interface Props {
   document: Document
   onlineUsers: string[]
 }
 
-export function DocumentViewer({ document, onlineUsers }: Props) {
+export function DocumentViewer({ document: docData, onlineUsers }: Props) {
   const { setSelectedParagraphId, setSelection } = useUiStore()
   const { user, isAdmin } = useAuthStore()
-  const updateDoc = useUpdateDocument(document.id)
+  const updateDoc = useUpdateDocument(docData.id)
   const canEdit = isAdmin
 
   const [editMode, setEditMode] = useState(false)
   const [dynamicPages, setDynamicPages] = useState<string[][]>([])
+  const [breakPids, setBreakPids] = useState<string[]>([])
   const measureRef = useRef<HTMLDivElement>(null)
 
   const editor = useEditor({
@@ -69,7 +71,7 @@ export function DocumentViewer({ document, onlineUsers }: Props) {
       Image,
       PageBreak,
     ],
-    content: document.content,
+    content: docData.content,
     editable: editMode,
   })
 
@@ -78,23 +80,23 @@ export function DocumentViewer({ document, onlineUsers }: Props) {
     if (editor) {
       editor.setEditable(editMode)
       if (editMode) {
-        editor.commands.setContent(document.content)
+        editor.commands.setContent(docData.content)
       }
     }
-  }, [editMode, editor, document.content])
+  }, [editMode, editor, docData.content])
 
   // ── Dynamic Pagination Logic ────────────────────────────────────────────────
   useEffect(() => {
-    if (!measureRef.current || editMode) return;
+    if (!measureRef.current) return;
 
-    // Use a small delay to ensure DOM is rendered in the hidden container
-    const timer = setTimeout(() => {
+    const runPagination = () => {
       const container = measureRef.current;
       if (!container) return;
 
       const children = Array.from(container.children);
       const usableHeight = PAGE_HEIGHT - PAGE_MARGIN * 2;
       const pageGroups: string[][] = [];
+      const breaks: string[] = [];
       let currentGroup: string[] = [];
       let currentHeight = 0;
 
@@ -104,9 +106,14 @@ export function DocumentViewer({ document, onlineUsers }: Props) {
         const childMargin = parseFloat(style.marginTop) + parseFloat(style.marginBottom);
         const totalHeight = childHeight + childMargin;
 
-        // If this element overflows a page
         if (currentHeight + totalHeight > usableHeight && currentGroup.length > 0) {
           pageGroups.push(currentGroup);
+          
+          // Mark the last element of the previous page to have a gap
+          const lastChild = children[children.indexOf(child) - 1];
+          const pid = lastChild?.getAttribute('data-pid');
+          if (pid) breaks.push(pid);
+
           currentGroup = [child.outerHTML];
           currentHeight = totalHeight;
         } else {
@@ -120,10 +127,12 @@ export function DocumentViewer({ document, onlineUsers }: Props) {
       }
 
       setDynamicPages(pageGroups);
-    }, 100);
+      setBreakPids(breaks);
+    };
 
+    const timer = setTimeout(runPagination, 100);
     return () => clearTimeout(timer);
-  }, [document.content, editMode]);
+  }, [docData.content, editMode, editor?.getHTML()]);
 
   // ── Text selection → paragraph anchor ──────────────────────────────────────
   const handleMouseUp = () => {
@@ -144,7 +153,7 @@ export function DocumentViewer({ document, onlineUsers }: Props) {
 
   // ── Save / Cancel ───────────────────────────────────────────────────────────
   const handleSave = () => {
-    const html = editor?.getHTML() ?? document.content
+    const html = editor?.getHTML() ?? docData.content
     updateDoc.mutate(
       { data: { content: html }, updatedBy: user },
       { onSuccess: () => setEditMode(false) }
@@ -152,22 +161,61 @@ export function DocumentViewer({ document, onlineUsers }: Props) {
   }
 
   const handleCancel = () => {
-    if (editor) editor.commands.setContent(document.content)
+    if (editor) editor.commands.setContent(docData.content)
     setEditMode(false)
   }
 
-  const processedHtml = injectTableStyles(wrapTopLevelBlocks(document.content))
+  const processedHtml = injectTableStyles(wrapTopLevelBlocks(docData.content))
   
-  // Extract headers and footers from the block markers
   const headerMatch = processedHtml.match(/<div class="doc-header-block">([\s\S]*?)<\/div>/);
   const footerMatch = processedHtml.match(/<div class="doc-footer-block">([\s\S]*?)<\/div>/);
   const headerHtml = headerMatch ? headerMatch[1] : '';
   const footerHtml = footerMatch ? footerMatch[1] : '';
 
-  // Filter out header/footer blocks from the body content for measurement
   const bodyContentForMeasurement = processedHtml
     .replace(/<div class="doc-header-block">[\s\S]*?<\/div>/, '')
     .replace(/<div class="doc-footer-block">[\s\S]*?<\/div>/, '');
+
+  // Inject dynamic styles for page breaks in editor
+  useEffect(() => {
+    const id = 'dynamic-page-breaks';
+    let styleEl = window.document.getElementById(id);
+    if (!styleEl) {
+      styleEl = window.document.createElement('style');
+      styleEl.id = id;
+      window.document.head.appendChild(styleEl);
+    }
+    
+    if (editMode && breakPids.length > 0) {
+      const css = breakPids.map(pid => `
+        .doc-editable [data-pid="${pid}"] { 
+          margin-bottom: ${PAGE_GAP + PAGE_MARGIN * 2}px !important; 
+          position: relative;
+        }
+        .doc-editable [data-pid="${pid}"]::after {
+          content: 'PAGE BREAK';
+          position: absolute;
+          bottom: -${PAGE_GAP + PAGE_MARGIN}px;
+          left: -${PAGE_MARGIN}px;
+          right: -${PAGE_MARGIN}px;
+          height: ${PAGE_GAP}px;
+          background: #cbd5e1;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 10px;
+          font-weight: 800;
+          color: #94a3b8;
+          letter-spacing: 3px;
+          pointer-events: none;
+          z-index: 5;
+        }
+      `).join('\n');
+      styleEl.textContent = css;
+    } else {
+      styleEl.textContent = '';
+    }
+  }, [editMode, breakPids]);
 
   return (
     <div style={styles.wrapper}>
@@ -179,8 +227,8 @@ export function DocumentViewer({ document, onlineUsers }: Props) {
           />
         )}
         <div style={styles.header}>
-          {document.original_filename && (
-            <span style={styles.filename}>📄 {document.original_filename}</span>
+          {docData.original_filename && (
+            <span style={styles.filename}>📄 {docData.original_filename}</span>
           )}
           {editMode && <span style={styles.editBadge}>Editing</span>}
         </div>
@@ -218,7 +266,7 @@ export function DocumentViewer({ document, onlineUsers }: Props) {
             position: "absolute",
             visibility: "hidden",
             width: `${PAGE_WIDTH - PAGE_MARGIN * 2}px`,
-            padding: `0`, // Measurement is within the usable area
+            padding: `0`, 
             lineHeight: 1.6,
             fontSize: 16,
             color: '#334155',
@@ -258,7 +306,7 @@ export function DocumentViewer({ document, onlineUsers }: Props) {
           </div>
         ))}
 
-        {/* ── Edit mode: Single continuous flow ── */}
+        {/* ── Edit mode: Single continuous flow with visual breaks ── */}
         <div
           className="doc-viewer doc-editable"
           style={{
@@ -266,6 +314,10 @@ export function DocumentViewer({ document, onlineUsers }: Props) {
             ...styles.editableContent,
             display: editMode ? 'block' : 'none',
             minHeight: '2000px',
+            background: editMode ? 'transparent' : '#fff',
+            boxShadow: 'none',
+            padding: 0,
+            width: 'auto',
           }}
         >
           <EditorContent editor={editor} />
@@ -335,7 +387,7 @@ const styles = {
     display: 'flex',
     flexDirection: 'column' as const,
     alignItems: 'center',
-    background: '#cbd5e1', // Slightly darker for page contrast
+    background: '#cbd5e1', 
   },
   page: {
     width: `${PAGE_WIDTH}px`,
@@ -364,7 +416,6 @@ const styles = {
   },
 }
 
-// ── Global styles for the viewer ──────────────────────────────────────────
 const _existing = typeof document !== 'undefined' && document.getElementById('doc-viewer-style')
 if (_existing) _existing.remove()
 if (typeof document !== 'undefined') {
@@ -373,7 +424,13 @@ if (typeof document !== 'undefined') {
   s.textContent = `
     .ProseMirror {
       outline: none;
-      min-height: 100%;
+      min-height: ${PAGE_HEIGHT}px;
+      width: ${PAGE_WIDTH}px;
+      padding: ${PAGE_MARGIN}px;
+      background: #fff;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+      box-sizing: border-box;
+      margin-bottom: 40px;
     }
     .ProseMirror p.is-editor-empty:first-child::before {
       content: attr(data-placeholder);
@@ -383,108 +440,34 @@ if (typeof document !== 'undefined') {
       height: 0;
     }
     /* ── Tables ── */
-    .doc-viewer table {
+    .doc-viewer table, .ProseMirror table {
       border-collapse: collapse;
       table-layout: fixed;
       width: 100%;
-      margin: 0;
+      margin: 20px 0;
       overflow: hidden;
     }
-    .doc-viewer td, .doc-viewer th {
+    .doc-viewer td, .doc-viewer th, .ProseMirror td, .ProseMirror th {
       min-width: 1em;
       border: 1px solid #cbd5e1;
-      padding: 3px 5px;
+      padding: 8px 12px;
       vertical-align: top;
       box-sizing: border-box;
       position: relative;
     }
-    .doc-viewer td > *, .doc-viewer th > * {
-      margin-bottom: 0;
-    }
-    .doc-viewer th {
+    .doc-viewer th, .ProseMirror th {
       font-weight: bold;
       text-align: left;
       background-color: #f8fafc;
     }
-    .doc-viewer .selectedCell:after {
-      z-index: 2;
-      position: absolute;
-      content: "";
-      left: 0; right: 0; top: 0; bottom: 0;
-      background: rgba(200, 200, 255, 0.4);
-      pointer-events: none;
-    }
-    .doc-viewer .column-resize-handle {
-      position: absolute;
-      right: -2px;
-      top: 0;
-      bottom: -2px;
-      width: 4px;
-      background-color: #adf;
-      pointer-events: none;
-    }
-    .doc-viewer .tableWrapper {
-      overflow-x: auto;
-    }
-    .doc-viewer .resize-cursor {
-      cursor: ew-resize;
-      cursor: col-resize;
-    }
-
-    /* ── Page Break ── */
-    .page-break {
-      display: block;
-      height: 40px;
-      margin: 40px -96px;
-      background: #f1f5f9;
-      box-shadow: inset 0 10px 10px -10px rgba(0,0,0,0.15), inset 0 -10px 10px -10px rgba(0,0,0,0.15);
-      position: relative;
-      user-select: none;
-      pointer-events: none;
-      width: calc(100% + 192px);
-      clear: both;
-    }
-    .page-break::after {
-      content: 'PAGE BREAK';
-      position: absolute;
-      left: 50%;
-      top: 50%;
-      transform: translate(-50%, -50%);
-      font-size: 10px;
-      font-weight: 800;
-      color: #94a3b8;
-      letter-spacing: 3px;
-      background: #f1f5f9;
-      padding: 0 15px;
-    }
     
-    /* ── Tiptap Task List ── */
-    ul[data-type="taskList"] {
-      list-style: none;
-      padding: 0;
-    }
-    ul[data-type="taskList"] li {
-      display: flex;
-      align-items: center;
-    }
-    ul[data-type="taskList"] li > label {
-      flex: 0 0 auto;
-      margin-right: 0.5rem;
-      user-select: none;
-    }
-    ul[data-type="taskList"] li > div {
-      flex: 1 1 auto;
-    }
-
     /* ── Headings ── */
-    .doc-viewer h1 { font-size: 2.5rem; font-weight: 800; margin: 2rem 0 1rem; color: #0f172a; }
-    .doc-viewer h2 { font-size: 1.8rem; font-weight: 700; margin: 1.5rem 0 0.75rem; color: #1e293b; }
-    .doc-viewer h3 { font-size: 1.4rem; font-weight: 600; margin: 1.25rem 0 0.5rem; color: #334155; }
-    
-    /* ── Alignment ── */
-    .doc-viewer [style*="text-align: center"] { text-align: center; }
-    .doc-viewer [style*="text-align: right"] { text-align: right; }
-    .doc-viewer [style*="text-align: justify"] { text-align: justify; }
+    .doc-viewer h1, .ProseMirror h1 { font-size: 2.5rem; font-weight: 800; margin: 2rem 0 1rem; color: #0f172a; }
+    .doc-viewer h2, .ProseMirror h2 { font-size: 1.8rem; font-weight: 700; margin: 1.5rem 0 0.75rem; color: #1e293b; }
+    .doc-viewer h3, .ProseMirror h3 { font-size: 1.4rem; font-weight: 600; margin: 1.25rem 0 0.5rem; color: #334155; }
+    .doc-viewer h4, .ProseMirror h4 { font-size: 1.2rem; font-weight: 600; margin: 1rem 0 0.5rem; color: #475569; }
+    .doc-viewer h5, .ProseMirror h5 { font-size: 1.1rem; font-weight: 600; margin: 0.75rem 0 0.25rem; color: #64748b; }
+    .doc-viewer h6, .ProseMirror h6 { font-size: 1rem; font-weight: 600; margin: 0.5rem 0 0.25rem; color: #94a3b8; }
   `
   document.head.appendChild(s)
 }

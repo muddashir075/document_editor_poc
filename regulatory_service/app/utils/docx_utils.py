@@ -26,6 +26,10 @@ p[style-name='Heading 3'] => h3:fresh
 p[style-name='Heading 3 Centered'] => h3.text-center:fresh
 p[style-name='Heading 4'] => h4:fresh
 p[style-name='Heading 4 Centered'] => h4.text-center:fresh
+p[style-name='Heading 5'] => h5:fresh
+p[style-name='Heading 5 Centered'] => h5.text-center:fresh
+p[style-name='Heading 6'] => h6:fresh
+p[style-name='Heading 6 Centered'] => h6.text-center:fresh
 p[style-name='Title'] => h1:fresh
 p[style-name='Title Centered'] => h1.text-center:fresh
 p[style-name='Subtitle'] => h2:fresh
