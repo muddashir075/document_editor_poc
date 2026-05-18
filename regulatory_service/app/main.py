@@ -48,3 +48,8 @@ def health():
 _media_path = Path(settings.MEDIA_ROOT)
 _media_path.mkdir(parents=True, exist_ok=True)
 app.mount(settings.MEDIA_URL, StaticFiles(directory=str(_media_path)), name="media")
+
+# Serve brand assets (header/footer images)
+_static_path = Path(__file__).parent / "static"
+if _static_path.exists():
+    app.mount("/static", StaticFiles(directory=str(_static_path)), name="static")

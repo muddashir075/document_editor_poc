@@ -1,47 +1,142 @@
-import { useRef, useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useRef } from 'react'
+import { useEditor, EditorContent } from '@tiptap/react'
+import { StarterKit } from '@tiptap/starter-kit'
+import { Underline } from '@tiptap/extension-underline'
+import { TextAlign } from '@tiptap/extension-text-align'
+import { TextStyle } from '@tiptap/extension-text-style'
+import { FontFamily } from '@tiptap/extension-font-family'
+import { Color } from '@tiptap/extension-color'
+import { Highlight } from '@tiptap/extension-highlight'
+import { Table } from '@tiptap/extension-table'
+import { TableRow } from '@tiptap/extension-table-row'
+import { TableCell } from '@tiptap/extension-table-cell'
+import { TableHeader } from '@tiptap/extension-table-header'
+import { TaskList } from '@tiptap/extension-task-list'
+import { TaskItem } from '@tiptap/extension-task-item'
+import { Image } from '@tiptap/extension-image'
+
+import { FontSize } from './extensions/FontSize'
+import { PageBreak } from './extensions/PageBreak'
+
 import { useUiStore } from '@/store/uiStore'
 import { useAuthStore } from '@/store/authStore'
 import { useUpdateDocument } from '@/hooks/useDocuments'
 import { Button } from '@/components/ui/Button'
 import type { Document } from '@/types'
+import DocumentToolbar from './DocumentToolbar'
+
+const PAGE_HEIGHT = 1300;  // A4 at 96dpi
+const PAGE_WIDTH  = 794;
+const PAGE_MARGIN = 96;    // ~1 inch
+const PAGE_GAP = 32;       // Gap between pages in editor
 
 interface Props {
   document: Document
   onlineUsers: string[]
 }
 
-export function DocumentViewer({ document, onlineUsers }: Props) {
+export function DocumentViewer({ document: docData, onlineUsers }: Props) {
   const { setSelectedParagraphId, setSelection } = useUiStore()
   const { user, isAdmin } = useAuthStore()
-  const updateDoc = useUpdateDocument(document.id)
-  // Only admins can edit document content directly
+  const updateDoc = useUpdateDocument(docData.id)
   const canEdit = isAdmin
 
   const [editMode, setEditMode] = useState(false)
-  const [activeFormats, setActiveFormats] = useState<Set<string>>(new Set())
-  const viewRef = useRef<HTMLDivElement>(null)
-  const editRef = useRef<HTMLDivElement>(null)
+  const [dynamicPages, setDynamicPages] = useState<string[][]>([])
+  const [breakPids, setBreakPids] = useState<string[]>([])
+  const measureRef = useRef<HTMLDivElement>(null)
 
-  // Populate contentEditable when entering edit mode
+  const editor = useEditor({
+    extensions: [
+      StarterKit,
+      Underline,
+      TextAlign.configure({
+        types: ['heading', 'paragraph'],
+      }),
+      TextStyle,
+      FontFamily,
+      FontSize,
+      Color,
+      Highlight.configure({ multicolor: true }),
+      Table.configure({
+        resizable: true,
+      }),
+      TableRow,
+      TableHeader,
+      TableCell,
+      TaskList,
+      TaskItem.configure({
+        nested: true,
+      }),
+      Image,
+      PageBreak,
+    ],
+    content: docData.content,
+    editable: editMode,
+  })
+
+  // Sync editMode with editor
   useEffect(() => {
-    if (editMode && editRef.current) {
-      editRef.current.innerHTML = document.content
-      editRef.current.focus()
+    if (editor) {
+      editor.setEditable(editMode)
+      if (editMode) {
+        editor.commands.setContent(docData.content)
+      }
     }
-  }, [editMode, document.content])
+  }, [editMode, editor, docData.content])
 
-  // Track active formats for toolbar highlight
-  const updateActiveFormats = useCallback(() => {
-    const formats = new Set<string>()
-    if (window.document.queryCommandState('bold')) formats.add('bold')
-    if (window.document.queryCommandState('italic')) formats.add('italic')
-    if (window.document.queryCommandState('underline')) formats.add('underline')
-    setActiveFormats(formats)
-  }, [])
+  // ── Dynamic Pagination Logic ────────────────────────────────────────────────
+  useEffect(() => {
+    if (!measureRef.current) return;
+
+    const runPagination = () => {
+      const container = measureRef.current;
+      if (!container) return;
+
+      const children = Array.from(container.children);
+      const usableHeight = PAGE_HEIGHT - PAGE_MARGIN * 2;
+      const pageGroups: string[][] = [];
+      const breaks: string[] = [];
+      let currentGroup: string[] = [];
+      let currentHeight = 0;
+
+      children.forEach((child) => {
+        const childHeight = child.getBoundingClientRect().height;
+        const style = window.getComputedStyle(child);
+        const childMargin = parseFloat(style.marginTop) + parseFloat(style.marginBottom);
+        const totalHeight = childHeight + childMargin;
+
+        if (currentHeight + totalHeight > usableHeight && currentGroup.length > 0) {
+          pageGroups.push(currentGroup);
+          
+          // Mark the last element of the previous page to have a gap
+          const lastChild = children[children.indexOf(child) - 1];
+          const pid = lastChild?.getAttribute('data-pid');
+          if (pid) breaks.push(pid);
+
+          currentGroup = [child.outerHTML];
+          currentHeight = totalHeight;
+        } else {
+          currentGroup.push(child.outerHTML);
+          currentHeight += totalHeight;
+        }
+      });
+
+      if (currentGroup.length > 0) {
+        pageGroups.push(currentGroup);
+      }
+
+      setDynamicPages(pageGroups);
+      setBreakPids(breaks);
+    };
+
+    const timer = setTimeout(runPagination, 100);
+    return () => clearTimeout(timer);
+  }, [docData.content, editMode, editor?.getHTML()]);
 
   // ── Text selection → paragraph anchor ──────────────────────────────────────
   const handleMouseUp = () => {
-    if (editMode) { updateActiveFormats(); return }
+    if (editMode) return
     const selection = window.getSelection()
     if (!selection || selection.isCollapsed) return
     const text = selection.toString().trim()
@@ -58,7 +153,7 @@ export function DocumentViewer({ document, onlineUsers }: Props) {
 
   // ── Save / Cancel ───────────────────────────────────────────────────────────
   const handleSave = () => {
-    const html = editRef.current?.innerHTML ?? document.content
+    const html = editor?.getHTML() ?? docData.content
     updateDoc.mutate(
       { data: { content: html }, updatedBy: user },
       { onSuccess: () => setEditMode(false) }
@@ -66,152 +161,74 @@ export function DocumentViewer({ document, onlineUsers }: Props) {
   }
 
   const handleCancel = () => {
-    if (editRef.current) editRef.current.innerHTML = document.content
+    if (editor) editor.commands.setContent(docData.content)
     setEditMode(false)
   }
 
-  // ── execCommand helpers ─────────────────────────────────────────────────────
-  const exec = (cmd: string, value?: string) => {
-    editRef.current?.focus()
-    window.document.execCommand(cmd, false, value)
-    updateActiveFormats()
-  }
+  const processedHtml = injectTableStyles(wrapTopLevelBlocks(docData.content))
+  
+  const headerMatch = processedHtml.match(/<div class="doc-header-block">([\s\S]*?)<\/div>/);
+  const footerMatch = processedHtml.match(/<div class="doc-footer-block">([\s\S]*?)<\/div>/);
+  const headerHtml = headerMatch ? headerMatch[1] : '';
+  const footerHtml = footerMatch ? footerMatch[1] : '';
 
-  const setHeading = (tag: string) => {
-    editRef.current?.focus()
-    window.document.execCommand('formatBlock', false, tag)
-  }
+  const bodyContentForMeasurement = processedHtml
+    .replace(/<div class="doc-header-block">[\s\S]*?<\/div>/, '')
+    .replace(/<div class="doc-footer-block">[\s\S]*?<\/div>/, '');
 
-  // ── Table helpers ───────────────────────────────────────────────────────────
-  /** Returns the <td> or <th> the cursor is currently inside, if any */
-  const getActiveCell = (): HTMLTableCellElement | null => {
-    const sel = window.getSelection()
-    if (!sel || sel.rangeCount === 0) return null
-    let node: Node | null = sel.getRangeAt(0).startContainer
-    while (node && node !== editRef.current) {
-      if (node.nodeName === 'TD' || node.nodeName === 'TH')
-        return node as HTMLTableCellElement
-      node = node.parentNode
+  // Inject dynamic styles for page breaks in editor
+  useEffect(() => {
+    const id = 'dynamic-page-breaks';
+    let styleEl = window.document.getElementById(id);
+    if (!styleEl) {
+      styleEl = window.document.createElement('style');
+      styleEl.id = id;
+      window.document.head.appendChild(styleEl);
     }
-    return null
-  }
-
-  const getActiveTable = (): HTMLTableElement | null => {
-    const cell = getActiveCell()
-    if (!cell) return null
-    let node: Node | null = cell
-    while (node && node !== editRef.current) {
-      if (node.nodeName === 'TABLE') return node as HTMLTableElement
-      node = node.parentNode
+    
+    if (editMode && breakPids.length > 0) {
+      const css = breakPids.map(pid => `
+        .doc-editable [data-pid="${pid}"] { 
+          margin-bottom: ${PAGE_GAP + PAGE_MARGIN * 2}px !important; 
+          position: relative;
+        }
+        .doc-editable [data-pid="${pid}"]::after {
+          content: 'PAGE BREAK';
+          position: absolute;
+          bottom: -${PAGE_GAP + PAGE_MARGIN}px;
+          left: -${PAGE_MARGIN}px;
+          right: -${PAGE_MARGIN}px;
+          height: ${PAGE_GAP}px;
+          background: #cbd5e1;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 10px;
+          font-weight: 800;
+          color: #94a3b8;
+          letter-spacing: 3px;
+          pointer-events: none;
+          z-index: 5;
+        }
+      `).join('\n');
+      styleEl.textContent = css;
+    } else {
+      styleEl.textContent = '';
     }
-    return null
-  }
-
-  /** Apply consistent inline border styles to a newly created cell */
-  const styleCell = (cell: HTMLTableCellElement) => {
-    cell.style.border = '1.5px solid #94a3b8'
-    cell.style.padding = '8px 12px'
-    cell.style.textAlign = 'left'
-    cell.style.verticalAlign = 'top'
-    cell.style.minWidth = '80px'
-  }
-
-  const addRowBelow = () => {
-    const cell = getActiveCell()
-    const table = getActiveTable()
-    if (!cell || !table) { alert('Click inside a table cell first.'); return }
-    const row = cell.closest('tr') as HTMLTableRowElement
-    const colCount = row.cells.length
-    const newRow = table.insertRow(row.rowIndex + 1)
-    for (let i = 0; i < colCount; i++) {
-      const td = newRow.insertCell(i)
-      td.innerHTML = '&nbsp;'
-      styleCell(td)
-    }
-  }
-
-  const addRowAbove = () => {
-    const cell = getActiveCell()
-    const table = getActiveTable()
-    if (!cell || !table) { alert('Click inside a table cell first.'); return }
-    const row = cell.closest('tr') as HTMLTableRowElement
-    const colCount = row.cells.length
-    const newRow = table.insertRow(row.rowIndex)
-    for (let i = 0; i < colCount; i++) {
-      const td = newRow.insertCell(i)
-      td.innerHTML = '&nbsp;'
-      styleCell(td)
-    }
-  }
-
-  const deleteRow = () => {
-    const cell = getActiveCell()
-    const table = getActiveTable()
-    if (!cell || !table) { alert('Click inside a table cell first.'); return }
-    const row = cell.closest('tr') as HTMLTableRowElement
-    if (table.rows.length <= 1) { alert('Cannot delete the only row.'); return }
-    table.deleteRow(row.rowIndex)
-  }
-
-  const addColumnRight = () => {
-    const cell = getActiveCell()
-    const table = getActiveTable()
-    if (!cell || !table) { alert('Click inside a table cell first.'); return }
-    const colIdx = cell.cellIndex + 1
-    Array.from(table.rows).forEach(row => {
-      const newCell = row.insertCell(colIdx)
-      newCell.innerHTML = '&nbsp;'
-      styleCell(newCell)
-    })
-  }
-
-  const addColumnLeft = () => {
-    const cell = getActiveCell()
-    const table = getActiveTable()
-    if (!cell || !table) { alert('Click inside a table cell first.'); return }
-    const colIdx = cell.cellIndex
-    Array.from(table.rows).forEach(row => {
-      const newCell = row.insertCell(colIdx)
-      newCell.innerHTML = '&nbsp;'
-      styleCell(newCell)
-    })
-  }
-
-  const deleteColumn = () => {
-    const cell = getActiveCell()
-    const table = getActiveTable()
-    if (!cell || !table) { alert('Click inside a table cell first.'); return }
-    const colIdx = cell.cellIndex
-    if (table.rows[0]?.cells.length <= 1) { alert('Cannot delete the only column.'); return }
-    Array.from(table.rows).forEach(row => row.deleteCell(colIdx))
-  }
-
-  const insertTable = () => {
-    editRef.current?.focus()
-    const rows = 3, cols = 3
-    const cellStyle = 'border:1.5px solid #94a3b8;padding:8px 12px;text-align:left;vertical-align:top;min-width:80px;'
-    const thStyle = cellStyle + 'background:#f1f5f9;font-weight:600;color:#334155;'
-    let html = '<table style="border-collapse:collapse;width:100%;margin:16px 0;font-size:13px;"><thead><tr>'
-    for (let c = 0; c < cols; c++) html += `<th style="${thStyle}">Header ${c + 1}</th>`
-    html += '</tr></thead><tbody>'
-    for (let r = 0; r < rows - 1; r++) {
-      html += '<tr>'
-      for (let c = 0; c < cols; c++) html += `<td style="${cellStyle}">&nbsp;</td>`
-      html += '</tr>'
-    }
-    html += '</tbody></table><p><br></p>'
-    window.document.execCommand('insertHTML', false, html)
-  }
-
-  const wrappedHtml = injectTableStyles(wrapTopLevelBlocks(document.content))
+  }, [editMode, breakPids]);
 
   return (
     <div style={styles.wrapper}>
       {/* ── Top toolbar ── */}
-      <div style={styles.toolbar}>
-        <div style={styles.fileInfo}>
-          {document.original_filename && (
-            <span style={styles.filename}>📄 {document.original_filename}</span>
+      <div style={styles.container}>
+        {editMode && (
+          <DocumentToolbar 
+            editor={editor} 
+          />
+        )}
+        <div style={styles.header}>
+          {docData.original_filename && (
+            <span style={styles.filename}>📄 {docData.original_filename}</span>
           )}
           {editMode && <span style={styles.editBadge}>Editing</span>}
         </div>
@@ -239,117 +256,77 @@ export function DocumentViewer({ document, onlineUsers }: Props) {
         </div>
       </div>
 
-      {/* ── Rich edit toolbar (only in edit mode) ── */}
-      {editMode && (
-        <div style={styles.editToolbar}>
-          {/* Formatting */}
-          <div style={styles.toolGroup}>
-            <ToolBtn active={activeFormats.has('bold')}    onClick={() => exec('bold')}      title="Bold (Ctrl+B)">B</ToolBtn>
-            <ToolBtn active={activeFormats.has('italic')}  onClick={() => exec('italic')}    title="Italic (Ctrl+I)" style={{ fontStyle: 'italic' }}>I</ToolBtn>
-            <ToolBtn active={activeFormats.has('underline')} onClick={() => exec('underline')} title="Underline (Ctrl+U)" style={{ textDecoration: 'underline' }}>U</ToolBtn>
+
+      {/* ── Main Workspace ── */}
+      <div style={styles.content}>
+        {/* Hidden measurement container */}
+        <div
+          ref={measureRef}
+          style={{
+            position: "absolute",
+            visibility: "hidden",
+            width: `${PAGE_WIDTH - PAGE_MARGIN * 2}px`,
+            padding: `0`, 
+            lineHeight: 1.6,
+            fontSize: 16,
+            color: '#334155',
+            pointerEvents: 'none',
+          }}
+          className="doc-viewer"
+          dangerouslySetInnerHTML={{ __html: bodyContentForMeasurement }}
+        />
+
+        {/* ── View mode: Paginated ── */}
+        {!editMode && dynamicPages.map((group, i) => (
+          <div
+            key={i}
+            className="doc-viewer"
+            style={styles.page}
+            onMouseUp={handleMouseUp}
+          >
+            {headerHtml && (
+              <div 
+                className="doc-header-repeated" 
+                style={{ marginBottom: 40, borderBottom: '1px solid #eee', paddingBottom: 10, fontSize: 12, color: '#64748b' }}
+                dangerouslySetInnerHTML={{ __html: headerHtml }} 
+              />
+            )}
+            
+            <div dangerouslySetInnerHTML={{ __html: group.join('') }} />
+            
+            {footerHtml && (
+              <div 
+                className="doc-footer-repeated" 
+                style={{ marginTop: 40, borderTop: '1px solid #eee', paddingTop: 10, fontSize: 12, color: '#64748b' }}
+                dangerouslySetInnerHTML={{ __html: footerHtml }} 
+              />
+            )}
+            
+            <div style={styles.pageNumber}>Page {i + 1} of {dynamicPages.length}</div>
           </div>
+        ))}
 
-          <div style={styles.divider} />
-
-          {/* Headings */}
-          <div style={styles.toolGroup}>
-            <ToolBtn onClick={() => setHeading('h1')} title="Heading 1">H1</ToolBtn>
-            <ToolBtn onClick={() => setHeading('h2')} title="Heading 2">H2</ToolBtn>
-            <ToolBtn onClick={() => setHeading('h3')} title="Heading 3">H3</ToolBtn>
-            <ToolBtn onClick={() => setHeading('p')}  title="Normal paragraph">¶</ToolBtn>
-          </div>
-
-          <div style={styles.divider} />
-
-          {/* Lists */}
-          <div style={styles.toolGroup}>
-            <ToolBtn onClick={() => exec('insertUnorderedList')} title="Bullet list">• List</ToolBtn>
-            <ToolBtn onClick={() => exec('insertOrderedList')}   title="Numbered list">1. List</ToolBtn>
-          </div>
-
-          <div style={styles.divider} />
-
-          {/* Table — insert */}
-          <div style={styles.toolGroup}>
-            <ToolBtn onClick={insertTable} title="Insert a 3×3 table">⊞ Table</ToolBtn>
-          </div>
-
-          <div style={styles.divider} />
-
-          {/* Table — row/col operations */}
-          <div style={styles.toolGroup}>
-            <ToolBtn onClick={addRowAbove}   title="Add row above cursor">↑ Row</ToolBtn>
-            <ToolBtn onClick={addRowBelow}   title="Add row below cursor">↓ Row</ToolBtn>
-            <ToolBtn onClick={deleteRow}     title="Delete current row" danger>✕ Row</ToolBtn>
-          </div>
-          <div style={styles.toolGroup}>
-            <ToolBtn onClick={addColumnLeft}  title="Add column to the left">← Col</ToolBtn>
-            <ToolBtn onClick={addColumnRight} title="Add column to the right">→ Col</ToolBtn>
-            <ToolBtn onClick={deleteColumn}   title="Delete current column" danger>✕ Col</ToolBtn>
-          </div>
+        {/* ── Edit mode: Single continuous flow with visual breaks ── */}
+        <div
+          className="doc-viewer doc-editable"
+          style={{
+            ...styles.page,
+            ...styles.editableContent,
+            display: editMode ? 'block' : 'none',
+            minHeight: '2000px',
+            background: editMode ? 'transparent' : '#fff',
+            boxShadow: 'none',
+            padding: 0,
+            width: 'auto',
+          }}
+        >
+          <EditorContent editor={editor} />
         </div>
-      )}
-
-      {/* ── View mode ── */}
-      <div
-        ref={viewRef}
-        onMouseUp={handleMouseUp}
-        className="doc-viewer"
-        style={{ ...styles.content, display: editMode ? 'none' : 'block' }}
-        dangerouslySetInnerHTML={{ __html: wrappedHtml }}
-      />
-
-      {/* ── Edit mode: contentEditable ── */}
-      <div
-        ref={editRef}
-        contentEditable={editMode}
-        suppressContentEditableWarning
-        onKeyUp={updateActiveFormats}
-        onMouseUp={handleMouseUp}
-        className="doc-viewer doc-editable"
-        style={{
-          ...styles.content,
-          ...styles.editableContent,
-          display: editMode ? 'block' : 'none',
-        }}
-      />
+      </div>
     </div>
   )
 }
 
-// ── Small toolbar button ────────────────────────────────────────────────────
-function ToolBtn({
-  children, onClick, title, active, danger, style: extraStyle,
-}: {
-  children: React.ReactNode
-  onClick: () => void
-  title?: string
-  active?: boolean
-  danger?: boolean
-  style?: React.CSSProperties
-}) {
-  return (
-    <button
-      onMouseDown={e => { e.preventDefault(); onClick() }} // preventDefault keeps focus in editor
-      title={title}
-      style={{
-        padding: '3px 8px',
-        borderRadius: 4,
-        border: '1px solid',
-        borderColor: active ? '#2563eb' : danger ? '#fca5a5' : '#e2e8f0',
-        background: active ? '#eff6ff' : danger ? '#fff1f2' : '#fff',
-        color: active ? '#2563eb' : danger ? '#dc2626' : '#374151',
-        fontSize: 12,
-        fontWeight: 600,
-        cursor: 'pointer',
-        lineHeight: 1.4,
-        ...extraStyle,
-      }}
-    >
-      {children}
-    </button>
-  )
-}
 
 // ── Wrap top-level blocks with data-pid for comment anchoring ───────────────
 function wrapTopLevelBlocks(html: string): string {
@@ -364,44 +341,33 @@ function wrapTopLevelBlocks(html: string): string {
 }
 
 // ── Inject inline styles on tables so borders always show ──────────────────
-// This is the most reliable approach — no CSS cascade can override inline styles.
 function injectTableStyles(html: string): string {
   return html
-    // <table ...> → add inline border-collapse + width
     .replace(
       /<table(\s[^>]*)?>/gi,
       (_m, attrs = '') =>
-        `<table${attrs} style="border-collapse:collapse;width:100%;margin:16px 0;font-size:13px;">`
+        `<table${attrs} style="border-collapse:collapse;width:100%;margin:20px 0;font-size:14px;">`
     )
-    // <td ...> → add inline border + padding
     .replace(
       /<td(\s[^>]*)?>/gi,
       (_m, attrs = '') =>
-        `<td${attrs} style="border:1.5px solid #94a3b8;padding:8px 12px;text-align:left;vertical-align:top;min-width:80px;">`
+        `<td${attrs} style="border:1px solid #cbd5e1;padding:10px 14px;vertical-align:top;min-width:80px;">`
     )
-    // <th ...> → add inline border + padding + background
     .replace(
       /<th(\s[^>]*)?>/gi,
       (_m, attrs = '') =>
-        `<th${attrs} style="border:1.5px solid #94a3b8;padding:8px 12px;text-align:left;vertical-align:top;min-width:80px;background:#f1f5f9;font-weight:600;color:#334155;">`
+        `<th${attrs} style="border:1px solid #cbd5e1;padding:10px 14px;vertical-align:top;min-width:80px;background:#f8fafc;font-weight:600;color:#1e293b;">`
     )
 }
 
 const styles = {
   wrapper: { display: 'flex', flexDirection: 'column' as const, height: '100%' },
-  toolbar: {
+  container: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    paddingBottom: 12, marginBottom: 8, borderBottom: '1px solid #f1f5f9', flexShrink: 0,
+    padding: '8px 16px', borderBottom: '1px solid #f1f5f9', background: '#fff',
   },
-  editToolbar: {
-    display: 'flex', alignItems: 'center', flexWrap: 'wrap' as const, gap: 4,
-    padding: '6px 0 10px', marginBottom: 8,
-    borderBottom: '1px solid #e2e8f0', flexShrink: 0,
-  },
-  toolGroup: { display: 'flex', gap: 3 },
-  divider: { width: 1, height: 22, background: '#e2e8f0', margin: '0 4px' },
-  fileInfo: { display: 'flex', alignItems: 'center', gap: 8 },
-  filename: { fontSize: 12, color: '#2563eb', fontWeight: 500 },
+  header: { display: 'flex', alignItems: 'center', gap: 12 },
+  filename: { fontSize: 13, color: '#1e293b', fontWeight: 600 },
   editBadge: {
     fontSize: 11, background: '#fef3c7', color: '#92400e',
     padding: '2px 8px', borderRadius: 9999, fontWeight: 600,
@@ -415,60 +381,93 @@ const styles = {
   },
   onlineCount: { fontSize: 11, color: '#64748b' },
   content: {
-    flex: 1, overflowY: 'auto' as const,
-    maxWidth: 860, lineHeight: 1.8, fontSize: 14, color: '#1e293b',
+    flex: 1, 
+    overflowY: 'auto' as const,
+    padding: '40px 0',
+    display: 'flex',
+    flexDirection: 'column' as const,
+    alignItems: 'center',
+    background: '#cbd5e1', 
+  },
+  page: {
+    width: `${PAGE_WIDTH}px`,
+    minHeight: `${PAGE_HEIGHT}px`,
+    padding: `${PAGE_MARGIN}px`,
+    background: '#fff',
+    boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+    margin: '0 auto 24px',
+    lineHeight: 1.6, 
+    fontSize: 16, 
+    color: '#334155',
+    position: 'relative' as const,
+    boxSizing: 'border-box' as const,
   },
   editableContent: {
-    outline: 'none', border: '2px solid #93c5fd',
-    borderRadius: 8, padding: '16px 20px', minHeight: 400, cursor: 'text',
+    outline: 'none',
+    cursor: 'text',
+  },
+  pageNumber: {
+    position: 'absolute' as const,
+    bottom: 40,
+    right: 40,
+    fontSize: 11,
+    color: '#94a3b8',
+    fontWeight: 500,
   },
 }
 
-// ── Global styles for the viewer (tables, headings, etc.) ───────────────────
-// Always remove and re-inject so hot-reload picks up changes
 const _existing = typeof document !== 'undefined' && document.getElementById('doc-viewer-style')
 if (_existing) _existing.remove()
 if (typeof document !== 'undefined') {
   const s = document.createElement('style')
   s.id = 'doc-viewer-style'
   s.textContent = `
+    .ProseMirror {
+      outline: none;
+      min-height: ${PAGE_HEIGHT}px;
+      width: ${PAGE_WIDTH}px;
+      padding: ${PAGE_MARGIN}px;
+      background: #fff;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+      box-sizing: border-box;
+      margin-bottom: 40px;
+    }
+    .ProseMirror p.is-editor-empty:first-child::before {
+      content: attr(data-placeholder);
+      float: left;
+      color: #adb5bd;
+      pointer-events: none;
+      height: 0;
+    }
     /* ── Tables ── */
-    .doc-viewer table {
-      border-collapse: collapse !important;
-      width: 100% !important;
-      margin: 16px 0 !important;
-      font-size: 13px !important;
+    .doc-viewer table, .ProseMirror table {
+      border-collapse: collapse;
+      table-layout: fixed;
+      width: 100%;
+      margin: 20px 0;
+      overflow: hidden;
     }
-    .doc-viewer td, .doc-viewer th {
-      border: 1.5px solid #94a3b8 !important;
-      padding: 8px 12px !important;
-      text-align: left !important;
-      vertical-align: top !important;
-      min-width: 80px !important;
+    .doc-viewer td, .doc-viewer th, .ProseMirror td, .ProseMirror th {
+      min-width: 1em;
+      border: 1px solid #cbd5e1;
+      padding: 8px 12px;
+      vertical-align: top;
+      box-sizing: border-box;
+      position: relative;
     }
-    .doc-viewer th {
-      background: #f1f5f9 !important;
-      font-weight: 600 !important;
-      color: #334155 !important;
+    .doc-viewer th, .ProseMirror th {
+      font-weight: bold;
+      text-align: left;
+      background-color: #f8fafc;
     }
-    .doc-viewer tr:nth-child(even) td { background: #f8fafc !important; }
-    /* Highlight cell on hover in edit mode */
-    .doc-editable td:hover, .doc-editable th:hover {
-      outline: 2px solid #3b82f6 !important;
-      outline-offset: -2px;
-    }
+    
     /* ── Headings ── */
-    .doc-viewer h1 { font-size: 22px !important; font-weight: 700 !important; margin: 24px 0 8px !important; color: #0f172a !important; }
-    .doc-viewer h2 { font-size: 18px !important; font-weight: 600 !important; margin: 20px 0 6px !important; color: #1e293b !important; }
-    .doc-viewer h3 { font-size: 15px !important; font-weight: 600 !important; margin: 16px 0 4px !important; color: #334155 !important; }
-    .doc-viewer h4 { font-size: 14px !important; font-weight: 600 !important; margin: 12px 0 4px !important; color: #475569 !important; }
-    /* ── Lists ── */
-    .doc-viewer ul, .doc-viewer ol { padding-left: 24px !important; margin: 8px 0 !important; }
-    .doc-viewer li { margin-bottom: 4px !important; }
-    /* ── Paragraphs ── */
-    .doc-viewer p  { margin: 0 0 10px !important; }
-    .doc-viewer strong { font-weight: 600 !important; }
-    .doc-viewer em { font-style: italic !important; }
+    .doc-viewer h1, .ProseMirror h1 { font-size: 2.5rem; font-weight: 800; margin: 2rem 0 1rem; color: #0f172a; }
+    .doc-viewer h2, .ProseMirror h2 { font-size: 1.8rem; font-weight: 700; margin: 1.5rem 0 0.75rem; color: #1e293b; }
+    .doc-viewer h3, .ProseMirror h3 { font-size: 1.4rem; font-weight: 600; margin: 1.25rem 0 0.5rem; color: #334155; }
+    .doc-viewer h4, .ProseMirror h4 { font-size: 1.2rem; font-weight: 600; margin: 1rem 0 0.5rem; color: #475569; }
+    .doc-viewer h5, .ProseMirror h5 { font-size: 1.1rem; font-weight: 600; margin: 0.75rem 0 0.25rem; color: #64748b; }
+    .doc-viewer h6, .ProseMirror h6 { font-size: 1rem; font-weight: 600; margin: 0.5rem 0 0.25rem; color: #94a3b8; }
   `
   document.head.appendChild(s)
 }

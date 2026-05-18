@@ -11,4 +11,9 @@ alembic
 python-dotenv
 python-docx
 mammoth
+<<<<<<< HEAD
 psycopg2-binary
+=======
+# psycopg2         # for window
+psycopg2-binary       # for ubuntu
+>>>>>>> 67f343cc7b6e6b68a41c93fe8163c691649af570

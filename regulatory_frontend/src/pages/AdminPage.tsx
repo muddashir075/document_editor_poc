@@ -73,7 +73,7 @@ function AdminDocDetail({ docId, adminUser }: { docId: number; adminUser: string
               key={s}
               size="sm"
               variant="secondary"
-              onClick={() => updateDoc.mutate({ status: s })}
+              onClick={() => updateDoc.mutate({ data: { status: s } })}
               disabled={updateDoc.isPending}
             >
               Set: {s.replace(/_/g, ' ')}
