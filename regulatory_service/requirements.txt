@@ -11,4 +11,4 @@ alembic
 python-dotenv
 python-docx
 mammoth
-psycopg2
+psycopg2-binary

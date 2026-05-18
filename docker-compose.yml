@@ -1,0 +1,99 @@
+version: "3.9"
+
+services:
+
+  #  PostgreSQL 
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: postgres
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  #  Zitadel (Identity Provider) 
+  zitadel:
+    image: ghcr.io/zitadel/zitadel:latest
+    command: >
+      start-from-init
+      --masterkey "${MASTER_KEY}"
+      --tlsMode disabled
+
+    environment:
+      ZITADEL_EXTERNALDOMAIN: localhost
+      ZITADEL_EXTERNALPORT: "8080"
+      ZITADEL_EXTERNALSECURE: "false"
+
+      ZITADEL_DATABASE_POSTGRES_HOST: postgres
+      ZITADEL_DATABASE_POSTGRES_PORT: "5432"
+      ZITADEL_DATABASE_POSTGRES_DATABASE: zitadel
+
+      ZITADEL_DATABASE_POSTGRES_ADMIN_USERNAME: ${POSTGRES_USER}
+      ZITADEL_DATABASE_POSTGRES_ADMIN_PASSWORD: ${POSTGRES_PASSWORD}
+      ZITADEL_DATABASE_POSTGRES_ADMIN_SSL_MODE: disable
+
+      ZITADEL_DATABASE_POSTGRES_USER_USERNAME: ${ZITADEL_DB_APP_USER}
+      ZITADEL_DATABASE_POSTGRES_USER_PASSWORD: ${ZITADEL_DB_APP_PASSWORD}
+      ZITADEL_DATABASE_POSTGRES_USER_SSL_MODE: disable
+
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_USERNAME: admin@zitadel.localhost
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_PASSWORD: Admin1234!
+
+      ZITADEL_DEFAULTINSTANCE_FEATURES_LOGINV2_REQUIRED: "false"
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    ports:
+      - "8080:8080"
+
+    restart: unless-stopped
+
+  #  Backend (FastAPI) 
+  backend:
+    build: ./regulatory_service
+    environment:
+      # Use the Docker service name, not localhost
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/document_editor
+      SECRET_KEY: changeme_in_production
+      APP_TITLE: Regulatory Service
+      APP_VERSION: "1.0.0"
+      ALLOWED_ORIGINS: "*"
+      MEDIA_ROOT: /app/doc_media
+      MEDIA_URL: /media
+    volumes:
+      - doc_media:/app/doc_media
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "5001:5001"
+    restart: unless-stopped
+
+  #  Frontend (Vite) 
+  frontend:
+    build: ./regulatory_frontend
+    environment:
+      VITE_API_BASE_URL: http://localhost:5001
+      VITE_WS_BASE_URL: ws://localhost:5001
+      VITE_MEDIA_BASE_URL: http://localhost:5001/media
+      VITE_DEFAULT_USER: admin
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  doc_media:
